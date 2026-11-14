@@ -1,0 +1,55 @@
+{
+	auto_https off
+	admin off
+}
+
+# The exact same "page not found" the panel serves for any unknown address.
+(notfound) {
+	header -Server
+	header Content-Type "text/html; charset=utf-8"
+	header X-Content-Type-Options nosniff
+	header Referrer-Policy no-referrer
+	respond "{file.templates/notfound.html}" 404
+}
+
+:{$PORT:8080} {
+	header -Server
+
+	# xhttp traffic. Anything the core rejects (wrong path, wrong method, a prober poking around)
+	# is answered with exactly the same "page not found" the rest of the site gives.
+	handle /s/* {
+		reverse_proxy 127.0.0.1:10000 {
+			flush_interval -1
+			header_down -Via
+			@bad status 400 404 405
+			handle_response @bad {
+				import notfound
+			}
+		}
+	}
+
+	# VLESS + WebSocket traffic (Caddy upgrades WebSocket connections automatically).
+	handle /w/* {
+		reverse_proxy 127.0.0.1:10001 {
+			flush_interval -1
+			header_down -Via
+			@bad status 400 404 405
+			handle_response @bad {
+				import notfound
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# If the core is not running (no users yet) or is restarting, tunnel paths must not reveal a
+	# bare gateway error: answer with the same "page not found" as everything else.
+	handle_errors {
+		@tun path /s/* /w/*
+		handle @tun {
+			import notfound
+		}
+	}
+}
